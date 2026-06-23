@@ -1,0 +1,9 @@
+# Example: enroll a namespace and allow ingress from argocd + prometheus.
+# - Remove the annotation entirely to un-enroll (operator deletes its policies).
+# - Set the value to "" to get default-deny + egress + self + baselines only.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: my-addon
+  annotations:
+    truefoundry.com/allowed-ingress-namespaces: "argocd,prometheus"
