@@ -39,8 +39,8 @@ def logger():
 
 @pytest.fixture
 def applied(monkeypatch):
-    """Capture apply/delete calls instead of hitting the API server."""
-    calls = {"applied": [], "deleted": []}
+    """Capture apply/delete/prune calls instead of hitting the API server."""
+    calls = {"applied": [], "deleted": [], "pruned": []}
 
     def fake_apply(body, _logger):
         calls["applied"].append(body)
@@ -48,8 +48,12 @@ def applied(monkeypatch):
     def fake_delete(namespace, _logger):
         calls["deleted"].append(namespace)
 
+    def fake_prune(namespace, keep, _logger):
+        calls["pruned"].append((namespace, set(keep)))
+
     monkeypatch.setattr(operator, "apply_network_policy", fake_apply)
     monkeypatch.setattr(operator, "delete_managed_policies", fake_delete)
+    monkeypatch.setattr(operator, "prune_managed_policies", fake_prune)
     return calls
 
 
@@ -60,6 +64,7 @@ def set_cfg(monkeypatch, **kw):
         node_cidrs=kw.get("node_cidrs", []),
         dry_run=kw.get("dry_run", False),
         allow_wildcard=kw.get("allow_wildcard", False),
+        default_deny_ingress=kw.get("default_deny_ingress", True),
     )
     monkeypatch.setattr(operator, "cfg", cfg)
     return cfg
@@ -135,6 +140,20 @@ def test_desired_policies_includes_node_cidrs(monkeypatch, logger):
     assert {"ipBlock": {"cidr": "10.0.0.0/16"}} in _froms(pols)
 
 
+def test_desired_policies_omits_deny_when_disabled(monkeypatch, logger):
+    set_cfg(monkeypatch, default_deny_ingress=False)
+    pols = operator._desired_policies("app", {ANNOTATION: "argocd"}, logger)
+    assert _names(pols) == [NAME_ALLOW_EGRESS, NAME_ALLOW_INGRESS]
+    assert NAME_DENY_INGRESS not in _names(pols)
+
+
+def test_desired_policies_omits_deny_when_disabled_wildcard(monkeypatch, logger):
+    set_cfg(monkeypatch, default_deny_ingress=False, allow_wildcard=True)
+    pols = operator._desired_policies("app", {ANNOTATION: "*"}, logger)
+    assert NAME_DENY_INGRESS not in _names(pols)
+    assert {"namespaceSelector": {}} in _froms(pols)
+
+
 # --- reconcile ----------------------------------------------------------------
 
 def test_reconcile_applies_three_policies_in_order(monkeypatch, applied, logger):
@@ -146,6 +165,25 @@ def test_reconcile_applies_three_policies_in_order(monkeypatch, applied, logger)
         NAME_DENY_INGRESS,
     ]
     assert applied["deleted"] == []
+
+
+def test_reconcile_prunes_to_desired_set(monkeypatch, applied, logger):
+    set_cfg(monkeypatch, dry_run=False)
+    operator.reconcile("app", {"annotations": {ANNOTATION: "argocd"}}, logger)
+    # prune is called once with exactly the three desired names to keep.
+    assert applied["pruned"] == [
+        ("app", {NAME_ALLOW_EGRESS, NAME_ALLOW_INGRESS, NAME_DENY_INGRESS})
+    ]
+
+
+def test_reconcile_with_deny_disabled_applies_two_and_prunes_deny(monkeypatch, applied, logger):
+    set_cfg(monkeypatch, dry_run=False, default_deny_ingress=False)
+    operator.reconcile("app", {"annotations": {ANNOTATION: "argocd"}}, logger)
+    assert _names(applied["applied"]) == [NAME_ALLOW_EGRESS, NAME_ALLOW_INGRESS]
+    # the keep-set excludes default-deny, so any existing deny policy gets pruned.
+    ns, keep = applied["pruned"][0]
+    assert keep == {NAME_ALLOW_EGRESS, NAME_ALLOW_INGRESS}
+    assert NAME_DENY_INGRESS not in keep
 
 
 def test_reconcile_dry_run_does_not_apply(monkeypatch, applied, logger):

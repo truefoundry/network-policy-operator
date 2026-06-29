@@ -64,6 +64,19 @@ def apply_network_policy(body: dict, logger) -> None:
 
 def delete_managed_policies(namespace: str, logger) -> None:
     """Delete every operator-managed NetworkPolicy in the namespace."""
+    _delete_managed(namespace, logger, keep=None, verb="deleted")
+
+
+def prune_managed_policies(namespace: str, keep: set[str], logger) -> None:
+    """Delete operator-managed NetworkPolicies in the namespace not in `keep`.
+
+    Used to remove policies that are no longer desired (e.g. when the default-deny
+    backstop is disabled via config) without touching the ones still wanted.
+    """
+    _delete_managed(namespace, logger, keep=keep, verb="pruned")
+
+
+def _delete_managed(namespace: str, logger, keep: set[str] | None, verb: str) -> None:
     net = _net()
     try:
         listing = net.list_namespaced_network_policy(
@@ -74,9 +87,12 @@ def delete_managed_policies(namespace: str, logger) -> None:
             return
         raise
     for item in listing.items:
+        name = item.metadata.name
+        if keep is not None and name in keep:
+            continue
         try:
-            net.delete_namespaced_network_policy(item.metadata.name, namespace)
-            logger.info(f"deleted networkpolicy {namespace}/{item.metadata.name}")
+            net.delete_namespaced_network_policy(name, namespace)
+            logger.info(f"{verb} networkpolicy {namespace}/{name}")
         except ApiException as exc:
             if exc.status != 404:
                 raise
