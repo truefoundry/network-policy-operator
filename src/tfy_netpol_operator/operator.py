@@ -38,6 +38,10 @@ def startup(settings: kopf.OperatorSettings, logger, **_):
     cfg = Config.load()
     # Run standalone (single replica). For HA, enable peering and run >1 replica.
     settings.posting.level = 20  # post events at INFO and above
+    # This operator only handles built-in resources (namespaces, networkpolicies),
+    # so disable Kopf's cluster-wide CRD discovery scan. Avoids needing cluster-scope
+    # list/watch on customresourcedefinitions (403s) for a capability we don't use.
+    settings.scanning.disabled = True
     logger.info(
         "tfy-netpol-operator started "
         f"(dry_run={cfg.dry_run}, baselines={cfg.baseline_allowed_namespaces}, "
