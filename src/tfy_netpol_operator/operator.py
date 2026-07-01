@@ -16,6 +16,7 @@ from .k8s import (
     apply_network_policy,
     delete_managed_policies,
     load_kube_config,
+    prune_managed_policies,
     read_namespace_annotations,
 )
 from .parsing import ANNOTATION, WILDCARD, merge_sources, parse_sources, split_valid
@@ -38,6 +39,10 @@ def startup(settings: kopf.OperatorSettings, logger, **_):
     cfg = Config.load()
     # Run standalone (single replica). For HA, enable peering and run >1 replica.
     settings.posting.level = 20  # post events at INFO and above
+    # This operator only handles built-in resources (namespaces, networkpolicies),
+    # so disable Kopf's cluster-wide CRD discovery scan. Avoids needing cluster-scope
+    # list/watch on customresourcedefinitions (403s) for a capability we don't use.
+    settings.scanning.disabled = True
     logger.info(
         "tfy-netpol-operator started "
         f"(dry_run={cfg.dry_run}, baselines={cfg.baseline_allowed_namespaces}, "
@@ -51,11 +56,13 @@ def _desired_policies(namespace: str, annotations: dict, logger) -> list[dict]:
 
     if raw == WILDCARD:
         if cfg.allow_wildcard:
-            return [
+            policies = [
                 build_allow_all_egress(namespace),
                 build_allow_ingress(namespace, [], cfg.node_cidrs, allow_all_namespaces=True),
-                build_default_deny_ingress(namespace),
             ]
+            if cfg.default_deny_ingress:
+                policies.append(build_default_deny_ingress(namespace))
+            return policies
         logger.warning(
             f"namespace {namespace}: wildcard '*' is rejected by policy; "
             "applying baseline + self only"
@@ -68,11 +75,14 @@ def _desired_policies(namespace: str, annotations: dict, logger) -> list[dict]:
     if invalid:
         logger.warning(f"namespace {namespace}: skipping invalid namespace names {invalid}")
 
-    return [
+    # Allow-before-deny: keep the default-deny backstop last when enabled.
+    policies = [
         build_allow_all_egress(namespace),
         build_allow_ingress(namespace, valid, cfg.node_cidrs),
-        build_default_deny_ingress(namespace),
     ]
+    if cfg.default_deny_ingress:
+        policies.append(build_default_deny_ingress(namespace))
+    return policies
 
 
 def reconcile(name: str, meta: dict | None, logger, allow_cleanup: bool = True) -> None:
@@ -88,6 +98,8 @@ def reconcile(name: str, meta: dict | None, logger, allow_cleanup: bool = True) 
 
     policies = _desired_policies(name, annotations, logger)
 
+    desired_names = {pol["metadata"]["name"] for pol in policies}
+
     if cfg.dry_run:
         for pol in policies:
             logger.info(f"[dry-run] would apply {pol['metadata']['name']} in {name}")
@@ -97,6 +109,10 @@ def reconcile(name: str, meta: dict | None, logger, allow_cleanup: bool = True) 
     # If any apply raises, the default-deny (last element) is never reached.
     for pol in policies:
         apply_network_policy(pol, logger)
+
+    # Remove any managed policy that is no longer desired (e.g. default-deny was
+    # disabled via config), so toggling options doesn't leave orphaned policies.
+    prune_managed_policies(name, desired_names, logger)
 
 
 # --- Namespace events ---------------------------------------------------------

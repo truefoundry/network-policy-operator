@@ -5,10 +5,12 @@ metadata:
   labels:
     {{- include "tfy-netpol-operator.labels" . | nindent 4 }}
 rules:
-  # Watch namespaces (annotation is the operator's input). No write access to namespaces.
+  # Watch namespaces (annotation is the operator's input). "patch" is required so
+  # Kopf can persist its bookkeeping (diffbase + handler progress) annotations on
+  # the namespace object for on.create/on.resume/on.update handlers.
   - apiGroups: [""]
     resources: ["namespaces"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "watch", "patch"]
   # Manage the generated NetworkPolicies.
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]

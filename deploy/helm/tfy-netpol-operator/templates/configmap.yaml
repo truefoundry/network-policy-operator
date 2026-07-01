@@ -8,6 +8,7 @@ data:
   config.yaml: |
     dryRun: {{ .Values.config.dryRun }}
     allowWildcard: {{ .Values.config.allowWildcard }}
+    defaultDenyIngress: {{ .Values.config.defaultDenyIngress }}
     resyncIntervalSeconds: {{ .Values.config.resyncIntervalSeconds }}
     baselineAllowedNamespaces:
       {{- toYaml .Values.config.baselineAllowedNamespaces | nindent 6 }}
