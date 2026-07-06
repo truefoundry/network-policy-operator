@@ -38,6 +38,10 @@ def startup(settings: kopf.OperatorSettings, logger, **_):
     cfg = Config.load()
     # Run standalone (single replica). For HA, enable peering and run >1 replica.
     settings.posting.level = 20  # post events at INFO and above
+    # This operator only handles built-in resources (namespaces, networkpolicies),
+    # so disable Kopf's cluster-wide CRD discovery scan. Avoids needing cluster-scope
+    # list/watch on customresourcedefinitions (the 403s) for a capability we don't use.
+    settings.scanning.disabled = True
     logger.info(
         "tfy-netpol-operator started "
         f"(dry_run={cfg.dry_run}, baselines={cfg.baseline_allowed_namespaces}, "
@@ -46,15 +50,20 @@ def startup(settings: kopf.OperatorSettings, logger, **_):
 
 
 def _desired_policies(namespace: str, annotations: dict, logger) -> list[dict]:
-    """Compute the ordered policy set [egress, allow-ingress, deny-ingress]."""
+    """Compute the ordered policy set [deny-ingress, egress, allow-ingress].
+
+    Deny-before-allow: the default-deny is applied first so ingress is closed
+    before the allow rules are added, minimizing any window in which unintended
+    ingress could be accepted during (re)application.
+    """
     raw = (annotations.get(ANNOTATION) or "").strip()
 
     if raw == WILDCARD:
         if cfg.allow_wildcard:
             return [
+                build_default_deny_ingress(namespace),
                 build_allow_all_egress(namespace),
                 build_allow_ingress(namespace, [], cfg.node_cidrs, allow_all_namespaces=True),
-                build_default_deny_ingress(namespace),
             ]
         logger.warning(
             f"namespace {namespace}: wildcard '*' is rejected by policy; "
@@ -69,9 +78,9 @@ def _desired_policies(namespace: str, annotations: dict, logger) -> list[dict]:
         logger.warning(f"namespace {namespace}: skipping invalid namespace names {invalid}")
 
     return [
+        build_default_deny_ingress(namespace),
         build_allow_all_egress(namespace),
         build_allow_ingress(namespace, valid, cfg.node_cidrs),
-        build_default_deny_ingress(namespace),
     ]
 
 
@@ -93,8 +102,9 @@ def reconcile(name: str, meta: dict | None, logger, allow_cleanup: bool = True) 
             logger.info(f"[dry-run] would apply {pol['metadata']['name']} in {name}")
         return
 
-    # Allow-before-deny, fail-closed: egress + allow first, deny last.
-    # If any apply raises, the default-deny (last element) is never reached.
+    # Deny-before-allow: apply the default-deny first so ingress is locked down
+    # before the allow rules are added. If a later apply fails, the namespace is
+    # left fail-closed (denying) rather than accidentally permitting ingress.
     for pol in policies:
         apply_network_policy(pol, logger)
 
