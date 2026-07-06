@@ -77,14 +77,14 @@ docker push <registry>/tfy-netpol-operator:<image-version>
 ```
 
 ## Deploy
-TrueFoundry Provided Operator image: `tfy.jfrog.io/tfy-images/tfy-netpol-operator:0.4.0`
+TrueFoundry Provided Operator image: `tfy.jfrog.io/tfy-images/tfy-netpol-operator:0.5.0`
 
 ```bash
 
 helm upgrade --install tfy-netpol-operator deploy/helm/tfy-netpol-operator \
   -n tfy-system --create-namespace \
   --set image.repository=tfy.jfrog.io/tfy-images/tfy-netpol-operator \
-  --set image.tag=0.4.0 \
+  --set image.tag=0.5.0 \
   --set 'config.baselineAllowedNamespaces={ingress-nginx,prometheus,tfy-agent}' \
   --set config.dryRun=true
 ```
@@ -109,3 +109,4 @@ Generated policies carry `app.kubernetes.io/managed-by: tfy-netpol-operator` and
 in any Argo CD Application's Git source. Exclude them from Argo pruning (resource
 exclusion or `ignoreDifferences`) so Argo does not delete operator-owned policies. See
 LLD §8.
+
