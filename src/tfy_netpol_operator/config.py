@@ -21,6 +21,7 @@ class Config:
     node_cidrs: list[str] = field(default_factory=list)
     dry_run: bool = True
     allow_wildcard: bool = False
+    default_deny_ingress: bool = True
     resync_interval: float = 300.0
 
     @classmethod
@@ -36,6 +37,7 @@ class Config:
             node_cidrs=list(data.get("nodeCIDRs", [])),
             dry_run=bool(data.get("dryRun", True)),
             allow_wildcard=bool(data.get("allowWildcard", False)),
+            default_deny_ingress=bool(data.get("defaultDenyIngress", True)),
             resync_interval=float(data.get("resyncIntervalSeconds", 300)),
         )
 

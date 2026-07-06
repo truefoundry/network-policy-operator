@@ -46,6 +46,9 @@ config:
   dryRun: true
   # Reject the "*" wildcard (allow-all-namespaces) by default.
   allowWildcard: false
+  # Create the explicit default-deny-ingress backstop policy in managed namespaces.
+  # Disable only if you intend to rely on the allow-ingress policy alone for isolation.
+  defaultDenyIngress: true
   resyncIntervalSeconds: 300
   # Always-allowed ingress sources injected into every managed namespace so an
   # empty/incomplete annotation cannot black-hole a namespace. Tune per cluster.

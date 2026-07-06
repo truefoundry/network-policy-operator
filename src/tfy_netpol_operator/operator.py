@@ -16,6 +16,7 @@ from .k8s import (
     apply_network_policy,
     delete_managed_policies,
     load_kube_config,
+    prune_managed_policies,
     read_namespace_annotations,
 )
 from .parsing import ANNOTATION, WILDCARD, merge_sources, parse_sources, split_valid
@@ -65,6 +66,9 @@ def _desired_policies(namespace: str, annotations: dict, logger) -> list[dict]:
                 build_allow_all_egress(namespace),
                 build_allow_ingress(namespace, [], cfg.node_cidrs, allow_all_namespaces=True),
             ]
+            if cfg.default_deny_ingress:
+                policies.append(build_default_deny_ingress(namespace))
+            return policies
         logger.warning(
             f"namespace {namespace}: wildcard '*' is rejected by policy; "
             "applying baseline + self only"
@@ -82,6 +86,9 @@ def _desired_policies(namespace: str, annotations: dict, logger) -> list[dict]:
         build_allow_all_egress(namespace),
         build_allow_ingress(namespace, valid, cfg.node_cidrs),
     ]
+    if cfg.default_deny_ingress:
+        policies.append(build_default_deny_ingress(namespace))
+    return policies
 
 
 def reconcile(name: str, meta: dict | None, logger, allow_cleanup: bool = True) -> None:
@@ -97,6 +104,8 @@ def reconcile(name: str, meta: dict | None, logger, allow_cleanup: bool = True) 
 
     policies = _desired_policies(name, annotations, logger)
 
+    desired_names = {pol["metadata"]["name"] for pol in policies}
+
     if cfg.dry_run:
         for pol in policies:
             logger.info(f"[dry-run] would apply {pol['metadata']['name']} in {name}")
@@ -107,6 +116,10 @@ def reconcile(name: str, meta: dict | None, logger, allow_cleanup: bool = True) 
     # left fail-closed (denying) rather than accidentally permitting ingress.
     for pol in policies:
         apply_network_policy(pol, logger)
+
+    # Remove any managed policy that is no longer desired (e.g. default-deny was
+    # disabled via config), so toggling options doesn't leave orphaned policies.
+    prune_managed_policies(name, desired_names, logger)
 
 
 # --- Namespace events ---------------------------------------------------------
