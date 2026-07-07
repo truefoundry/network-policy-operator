@@ -80,17 +80,11 @@ docker push <registry>/tfy-netpol-operator:<image-version>
 TrueFoundry Provided Operator image: `tfy.jfrog.io/tfy-images/tfy-netpol-operator:0.5.0`
 
 ```bash
-Build:
-docker build -t <registry>/tfy-netpol-operator:0.1.0 .
-docker push <registry>/tfy-netpol-operator:0.1.0
-
-Deploy:
-This image can be used: tfy.jfrog.io/tfy-images/tfy-netpol-operator:0.2.0
 helm upgrade --install tfy-netpol-operator deploy/helm/tfy-netpol-operator \
   -n tfy-system --create-namespace \
   --set image.repository=tfy.jfrog.io/tfy-images/tfy-netpol-operator \
   --set image.tag=0.5.0 \
-  --set 'config.baselineAllowedNamespaces={ingress-nginx,prometheus,tfy-agent}' \
+  --set 'config.baselineAllowedNamespaces={istio-system,prometheus,tfy-agent}' \
   --set config.dryRun=true
 ```
 
