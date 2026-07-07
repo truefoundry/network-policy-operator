@@ -8,9 +8,9 @@ Built on [Kopf](https://kopf.readthedocs.io/). See the design docs:
 
 For every namespace carrying the single annotation
 `truefoundry.com/allowed-ingress-namespaces`, the operator reconciles three standard
-`networking.k8s.io/v1` NetworkPolicies:
+`networking.k8s.io/v1` NetworkPolicies, applied in this order:
 
-1. `tfy-np-default-deny-ingress` — default-deny ingress.
+1. `tfy-np-default-deny-ingress` — default-deny ingress (applied first).
 2. `tfy-np-allow-egress` — allow-all egress (egress stays open).
 3. `tfy-np-allow-ingress` — allow ingress from the same namespace, the configured
    baseline namespaces, and the namespaces listed in the annotation.
@@ -23,9 +23,11 @@ Annotation semantics:
 | Present, empty (`""`) | Default-deny ingress + allow-all egress + allow `self` + baselines. |
 | Present, with list (`"argocd,prometheus"`) | The above **plus** allow ingress from each listed namespace. |
 
-Key safety properties: **allow-before-deny** ordering (fail-closed), **baseline allows**
-so an empty annotation cannot black-hole a namespace, **system-namespace exclusion**,
-and **dry-run** mode for first rollout.
+Key safety properties: **deny-before-allow** ordering (the default-deny is applied
+first so ingress is locked down before the allow rules are added; a failed
+mid-reconcile therefore fails closed), **baseline allows** so an empty annotation
+cannot black-hole a namespace, **system-namespace exclusion**, and **dry-run** mode
+for first rollout.
 
 ## Layout
 
@@ -66,20 +68,23 @@ denylist: [tfy-system]
 nodeCIDRs: []
 ```
 
-## Build & deploy
+## Build
+`Note:` Can be skipped if using Truefoundry provided version of Operator
 
 ```bash
-Build:
-docker build -t <registry>/tfy-netpol-operator:0.1.0 .
-docker push <registry>/tfy-netpol-operator:0.1.0
+docker build -t <registry>/tfy-netpol-operator:<image-version> .
+docker push <registry>/tfy-netpol-operator:<image-version>
+```
 
-Deploy:
-This image can be used: tfy.jfrog.io/tfy-images/tfy-netpol-operator:0.2.0
+## Deploy
+TrueFoundry Provided Operator image: `tfy.jfrog.io/tfy-images/tfy-netpol-operator:0.5.0`
+
+```bash
 helm upgrade --install tfy-netpol-operator deploy/helm/tfy-netpol-operator \
   -n tfy-system --create-namespace \
   --set image.repository=tfy.jfrog.io/tfy-images/tfy-netpol-operator \
-  --set image.tag=0.2.0 \
-  --set 'config.baselineAllowedNamespaces={ingress-nginx,prometheus,tfy-agent}' \
+  --set image.tag=0.5.0 \
+  --set 'config.baselineAllowedNamespaces={istio-system,prometheus,tfy-agent}' \
   --set config.dryRun=true
 ```
 
@@ -103,3 +108,4 @@ Generated policies carry `app.kubernetes.io/managed-by: tfy-netpol-operator` and
 in any Argo CD Application's Git source. Exclude them from Argo pruning (resource
 exclusion or `ignoreDifferences`) so Argo does not delete operator-owned policies. See
 LLD §8.
+

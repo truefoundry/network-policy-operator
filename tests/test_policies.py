@@ -44,9 +44,9 @@ def test_allow_ingress_wildcard_all_namespaces():
     assert np["spec"]["ingress"][0]["from"] == [{"namespaceSelector": {}}]
 
 
-def test_policy_set_order_is_allow_before_deny():
+def test_policy_set_order_is_deny_before_allow():
     policies = build_policy_set("truefoundry", ["argocd"])
     names = [p["metadata"]["name"] for p in policies]
-    # egress, allow-ingress, then deny last
-    assert names == [NAME_ALLOW_EGRESS, NAME_ALLOW_INGRESS, NAME_DENY_INGRESS]
-    assert names[-1] == NAME_DENY_INGRESS
+    # deny first, then egress, then allow-ingress
+    assert names == [NAME_DENY_INGRESS, NAME_ALLOW_EGRESS, NAME_ALLOW_INGRESS]
+    assert names[0] == NAME_DENY_INGRESS

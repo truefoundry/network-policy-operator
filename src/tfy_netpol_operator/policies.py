@@ -76,12 +76,13 @@ def build_policy_set(
     node_cidrs: list[str] | None = None,
     allow_all_namespaces: bool = False,
 ) -> list[dict]:
-    """Return the policy set in apply order: egress, allow-ingress, then default-deny.
+    """Return the policy set in apply order: default-deny, egress, then allow-ingress.
 
-    Allow-before-deny: the default-deny must be applied last.
+    Deny-before-allow: the default-deny is applied first to lock down ingress
+    before the allow rules are added.
     """
     return [
+        build_default_deny_ingress(namespace),
         build_allow_all_egress(namespace),
         build_allow_ingress(namespace, sources, node_cidrs, allow_all_namespaces),
-        build_default_deny_ingress(namespace),
     ]
