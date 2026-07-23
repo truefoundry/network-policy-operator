@@ -1,7 +1,12 @@
 from tfy_netpol_operator.parsing import (
+    expand_patterns,
+    is_pattern,
     is_valid_namespace_name,
+    is_valid_pattern,
     merge_sources,
     parse_sources,
+    partition_patterns,
+    pattern_matches,
     split_valid,
 )
 
@@ -55,3 +60,50 @@ def test_merge_sources_injects_baselines_and_dedupes():
 def test_merge_sources_drops_self():
     merged = merge_sources(user=["truefoundry", "argocd"], baseline=[], self_name="truefoundry")
     assert merged == ["argocd"]
+
+
+# --- prefix patterns (e.g. "ihg-*") --------------------------------------------
+
+def test_is_pattern_distinguishes_patterns_from_names_and_bare_wildcard():
+    assert is_pattern("ihg-*")
+    assert is_pattern("a*")
+    assert is_pattern("*ihg")  # malformed, but routed to pattern validation
+    assert not is_pattern("*")  # bare wildcard handled separately
+    assert not is_pattern("argocd")
+
+
+def test_is_valid_pattern():
+    assert is_valid_pattern("ihg-*")
+    assert is_valid_pattern("ihg*")
+    assert not is_valid_pattern("*ihg")  # star must be trailing
+    assert not is_valid_pattern("-ihg*")  # must start alphanumeric
+    assert not is_valid_pattern("ihg-*-x*")  # single trailing star only
+    assert not is_valid_pattern("a" * 63 + "*")  # too long
+
+
+def test_partition_patterns_preserves_order():
+    plain, patterns = partition_patterns(["argocd", "ihg-*", "prometheus", "team-*"])
+    assert plain == ["argocd", "prometheus"]
+    assert patterns == ["ihg-*", "team-*"]
+
+
+def test_pattern_matches_prefix():
+    assert pattern_matches("ihg-*", "ihg-app")
+    assert pattern_matches("ihg-*", "ihg-")
+    assert not pattern_matches("ihg-*", "ihg")
+    assert not pattern_matches("ihg-*", "other")
+
+
+def test_expand_patterns_matches_and_dedupes():
+    namespaces = ["ihg-a", "ihg-b", "other", "team-x"]
+    assert expand_patterns(["ihg-*"], namespaces) == ["ihg-a", "ihg-b"]
+    # union across patterns, de-duplicated, pattern order first
+    assert expand_patterns(["team-*", "ihg-*", "ihg-*"], namespaces) == [
+        "team-x",
+        "ihg-a",
+        "ihg-b",
+    ]
+
+
+def test_expand_patterns_no_match_is_empty():
+    assert expand_patterns(["ihg-*"], ["other", "argocd"]) == []

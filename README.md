@@ -10,10 +10,11 @@ For every namespace carrying the single annotation
 `truefoundry.com/allowed-ingress-namespaces`, the operator reconciles three standard
 `networking.k8s.io/v1` NetworkPolicies, applied in this order:
 
-1. `tfy-np-default-deny-ingress` — default-deny ingress (applied first).
-2. `tfy-np-allow-egress` — allow-all egress (egress stays open).
-3. `tfy-np-allow-ingress` — allow ingress from the same namespace, the configured
+1. `tfy-np-allow-egress` — allow-all egress (egress stays open).
+2. `tfy-np-allow-ingress` — allow ingress from the same namespace, the configured
    baseline namespaces, and the namespaces listed in the annotation.
+3. `tfy-np-default-deny-ingress` — default-deny ingress backstop (applied last,
+   after the allow rules are in place; can be disabled via `defaultDenyIngress`).
 
 Annotation semantics:
 
@@ -22,12 +23,12 @@ Annotation semantics:
 | Absent | Namespace not managed; any managed policies are removed. |
 | Present, empty (`""`) | Default-deny ingress + allow-all egress + allow `self` + baselines. |
 | Present, with list (`"argocd,prometheus"`) | The above **plus** allow ingress from each listed namespace. |
+| Present, with prefix wildcard (`"ihg-*"`) | The above **plus** allow ingress from every namespace whose name starts with `ihg-`. New matching namespaces are picked up immediately on creation; deletions are cleaned up on the next resync. Only a single trailing `*` is supported, and it can be mixed with plain names (`"argocd,ihg-*"`). |
 
-Key safety properties: **deny-before-allow** ordering (the default-deny is applied
-first so ingress is locked down before the allow rules are added; a failed
-mid-reconcile therefore fails closed), **baseline allows** so an empty annotation
-cannot black-hole a namespace, **system-namespace exclusion**, and **dry-run** mode
-for first rollout.
+Key safety properties: **allow-before-deny** ordering (the allow rules are applied
+before the default-deny backstop so a namespace is never left deny-only
+mid-reconcile), **baseline allows** so an empty annotation cannot black-hole a
+namespace, **system-namespace exclusion**, and **dry-run** mode for first rollout.
 
 ## Layout
 
