@@ -1,0 +1,60 @@
+# Publishes the tfy-netpol-operator Helm chart to the public TrueFoundry
+# Artifactory OCI registry (tfy.jfrog.io/tfy-helm), mirroring
+# infra-charts' artifactory-helm-release.yaml. A version that already
+# exists in the registry is skipped, so re-publishing requires bumping
+# `version` in Chart.yaml.
+name: Release Helm chart to public artifactory
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "deploy/helm/**"
+      - ".github/workflows/artifactory-helm-release.yaml"
+  workflow_dispatch:
+
+env:
+  CHART_DIR: deploy/helm/tfy-netpol-operator
+  # Same org-level names as truefoundry/infra-charts; the shell steps below
+  # fall back to the known public URLs if the vars aren't exposed to this
+  # repo. The secrets have no fallback — they must be made available.
+  ARTIFACTORY_REGISTRY: ${{ vars.TRUEFOUNDRY_ARTIFACTORY_REGISTRY_URL }}
+  ARTIFACTORY_REPOSITORY_URL: ${{ vars.TRUEFOUNDRY_ARTIFACTORY_PUBLIC_HELM_REGISTRY }}
+  ARTIFACTORY_USERNAME: ${{ secrets.TRUEFOUNDRY_ARTIFACTORY_PUBLIC_USERNAME }}
+  ARTIFACTORY_PASSWORD: ${{ secrets.TRUEFOUNDRY_ARTIFACTORY_PUBLIC_PASSWORD }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4.3.0
+        with:
+          version: v3.17.3
+
+      - name: Helm registry login
+        run: |
+          REGISTRY="${ARTIFACTORY_REGISTRY:-tfy.jfrog.io}"
+          helm registry login "$REGISTRY" -u "$ARTIFACTORY_USERNAME" -p "$ARTIFACTORY_PASSWORD"
+
+      - name: Package and push chart
+        run: |
+          set -euo pipefail
+          REPO_URL="${ARTIFACTORY_REPOSITORY_URL:-tfy.jfrog.io/tfy-helm}"
+
+          CHART_NAME=$(helm show chart "$CHART_DIR" | awk '/^name:/ {print $2}')
+          CHART_VERSION=$(helm show chart "$CHART_DIR" | awk '/^version:/ {print $2}')
+
+          if helm pull "oci://${REPO_URL}/${CHART_NAME}" --version "$CHART_VERSION" >/dev/null 2>&1; then
+            echo "${CHART_NAME}-${CHART_VERSION} already exists in oci://${REPO_URL}; skipping."
+            exit 0
+          fi
+
+          helm dependency update "$CHART_DIR"
+          helm package "$CHART_DIR"
+          helm push "${CHART_NAME}-${CHART_VERSION}.tgz" "oci://${REPO_URL}"
+          echo "Pushed ${CHART_NAME}-${CHART_VERSION} to oci://${REPO_URL}"
