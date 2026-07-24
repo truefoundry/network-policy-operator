@@ -78,19 +78,25 @@ docker push <registry>/tfy-netpol-operator:<image-version>
 ```
 
 ## Deploy
-TrueFoundry Provided Operator image: `tfy.jfrog.io/tfy-images/tfy-netpol-operator:0.5.0`
+TrueFoundry Provided Operator image: `tfy.jfrog.io/tfy-images/tfy-netpol-operator:0.6.0`
 
 ```bash
 helm upgrade --install tfy-netpol-operator deploy/helm/tfy-netpol-operator \
   -n tfy-system --create-namespace \
   --set image.repository=tfy.jfrog.io/tfy-images/tfy-netpol-operator \
-  --set image.tag=0.5.0 \
+  --set image.tag=0.6.0 \
   --set 'config.baselineAllowedNamespaces={istio-system,prometheus,tfy-agent}' \
   --set config.dryRun=true
 ```
 
 Roll out with `config.dryRun=true` first, review the logged intended policies, then set
 `config.dryRun=false` to enforce.
+
+> **Prerequisite:** the cluster's CNI must actually enforce NetworkPolicies, or the
+> operator's policies are accepted by the API server but ignored. On EKS with the AWS
+> VPC CNI, enable it on the addon (`enableNetworkPolicy: "true"`) and verify with
+> `kubectl get policyendpoints -A` — see the
+> [wildcard test report](docs/wildcard-annotation-test-report.md) for how this fails open.
 
 ## Enroll a namespace
 
@@ -102,6 +108,20 @@ metadata:
   annotations:
     truefoundry.com/allowed-ingress-namespaces: "argocd,prometheus"
 ```
+
+Prefix wildcards are supported, alone or mixed with plain names:
+
+```yaml
+    truefoundry.com/allowed-ingress-namespaces: "argocd,ihg-*"
+```
+
+## Verification
+
+The wildcard feature was verified end to end on a live EKS cluster (operator 0.6.0):
+policy-spec expansion, immediate pickup of newly created matching namespaces (< 10 s),
+pruning of deleted namespaces on resync, rejection/warning cases, and a real traffic
+matrix with CNI enforcement enabled — 15/15 cases passed. Full details, evidence, and
+observed latencies: [docs/wildcard-annotation-test-report.md](docs/wildcard-annotation-test-report.md).
 
 ## Argo CD coexistence
 
