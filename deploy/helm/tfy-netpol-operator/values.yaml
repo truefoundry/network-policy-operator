@@ -40,6 +40,12 @@ nodeSelector: {}
 tolerations: []
 affinity: {}
 
+# On `helm uninstall`, run a post-delete hook Job that deletes every
+# NetworkPolicy the operator created (label
+# app.kubernetes.io/managed-by=tfy-netpol-operator) across all namespaces.
+# Set to false to keep the policies in place after uninstalling the operator.
+cleanupOnUninstall: true
+
 # ---- Operator behavior (rendered into the ConfigMap) ------------------------
 config:
   # Start in report-only mode. Set to false to enforce.

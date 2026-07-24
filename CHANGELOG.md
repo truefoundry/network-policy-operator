@@ -36,8 +36,20 @@ also the Python package version) and the **Helm chart** version.
   publishes the operator image to `tfy.jfrog.io/tfy-images` on push to `main`
   via the shared `truefoundry/github-workflows-public` build workflow, tagged
   with the chart's `appVersion` and skipping already-published tags.
+- Chart: `helm uninstall` now removes every operator-managed NetworkPolicy via
+  a post-delete hook Job (`cleanupOnUninstall`, default `true`). Runs after the
+  operator is gone so the drift watch cannot recreate the policies mid-cleanup.
 
 ### Fixed
+
+- Managed NetworkPolicies no longer carry a Kopf finalizer
+  (`kopf.zalando.org/KopfFinalizerMarker`). Previously, deleting a managed
+  policy while the operator was stopped (scaled down or uninstalled) hung in
+  `Terminating` forever because only the operator could remove the finalizer.
+  The drift-watch delete handler is now registered with `optional=True`
+  (best-effort deletion events; the resync timer covers any missed drift), and
+  the uninstall cleanup hook strips leftover finalizers from policies created
+  by older operator versions.
 
 - Policy apply order: leftover dead code from the apply-order change (#4) made
   the operator still apply `tfy-np-default-deny-ingress` first and ignore the

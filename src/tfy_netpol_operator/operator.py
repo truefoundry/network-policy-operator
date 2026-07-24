@@ -183,7 +183,16 @@ def resync(name, meta, logger, **_):
 
 # --- Drift on managed policies ------------------------------------------------
 
-@kopf.on.delete("networking.k8s.io", "v1", "networkpolicies", labels=_MANAGED_LABEL_FILTER)
+# optional=True: without it, Kopf adds a KopfFinalizerMarker finalizer to every
+# managed policy so it can guarantee delivery of the deletion event. That
+# deadlocks external cleanup — with the operator stopped (scaled down or
+# uninstalled), deletions hang in Terminating forever because nothing removes
+# the finalizer. Best-effort delivery is fine here: the resync timer re-applies
+# any missed drift anyway.
+@kopf.on.delete(
+    "networking.k8s.io", "v1", "networkpolicies",
+    labels=_MANAGED_LABEL_FILTER, optional=True,
+)
 @kopf.on.update("networking.k8s.io", "v1", "networkpolicies", labels=_MANAGED_LABEL_FILTER)
 def on_managed_policy_changed(namespace, logger, **_):
     annotations = read_namespace_annotations(namespace)

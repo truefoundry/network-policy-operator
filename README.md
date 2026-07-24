@@ -123,6 +123,42 @@ pruning of deleted namespaces on resync, rejection/warning cases, and a real tra
 matrix with CNI enforcement enabled — 15/15 cases passed. Full details, evidence, and
 observed latencies: [docs/wildcard-annotation-test-report.md](docs/wildcard-annotation-test-report.md).
 
+## Disable / uninstall
+
+Per namespace, remove the annotation and the operator deletes its policies there:
+
+```bash
+kubectl annotate ns <namespace> truefoundry.com/allowed-ingress-namespaces-
+```
+
+To remove everything, uninstall the release — a post-delete hook Job deletes every
+operator-managed NetworkPolicy across all namespaces (disable with
+`--set cleanupOnUninstall=false` to keep the policies):
+
+```bash
+helm uninstall tfy-netpol-operator -n tfy-system
+```
+
+For manual cleanup, scale the operator to zero **first** (it recreates its policies
+on drift while running), then delete by label:
+
+```bash
+kubectl -n tfy-system scale deploy tfy-netpol-operator --replicas=0
+kubectl delete netpol -A -l app.kubernetes.io/managed-by=tfy-netpol-operator
+```
+
+If policies created by an operator **older than 0.6.0** hang in `Terminating`
+here, they carry a Kopf finalizer only the (now stopped) operator could remove;
+strip it to let the deletion finish:
+
+```bash
+kubectl get netpol -A -o jsonpath='{range .items[*]}{.metadata.namespace} {.metadata.name}{"\n"}{end}' | \
+  while read ns name; do kubectl patch netpol "$name" -n "$ns" --type=merge -p '{"metadata":{"finalizers":null}}'; done
+```
+
+Note that `config.dryRun: true` only stops new writes — it does not remove policies
+that were already applied.
+
 ## Argo CD coexistence
 
 Generated policies carry `app.kubernetes.io/managed-by: tfy-netpol-operator` and are not
