@@ -36,6 +36,16 @@ def read_namespace_annotations(namespace: str) -> dict | None:
     return ns.metadata.annotations or {}
 
 
+def list_namespaces_with_annotations() -> list[tuple[str, dict]]:
+    """Return (name, annotations) for every namespace in the cluster.
+
+    Used to expand prefix patterns (e.g. "ihg-*") and to find namespaces whose
+    patterns match a newly created namespace.
+    """
+    items = _core().list_namespace().items
+    return [(i.metadata.name, i.metadata.annotations or {}) for i in items]
+
+
 def apply_network_policy(body: dict, logger) -> None:
     """Create or update a NetworkPolicy idempotently.
 

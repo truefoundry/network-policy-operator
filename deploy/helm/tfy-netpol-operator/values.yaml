@@ -1,6 +1,6 @@
 image:
   repository: tfy.jfrog.io/tfy-images/tfy-netpol-operator
-  tag: "0.1.0"
+  tag: "0.6.0"
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
@@ -39,6 +39,12 @@ resources:
 nodeSelector: {}
 tolerations: []
 affinity: {}
+
+# On `helm uninstall`, run a post-delete hook Job that deletes every
+# NetworkPolicy the operator created (label
+# app.kubernetes.io/managed-by=tfy-netpol-operator) across all namespaces.
+# Set to false to keep the policies in place after uninstalling the operator.
+cleanupOnUninstall: true
 
 # ---- Operator behavior (rendered into the ConfigMap) ------------------------
 config:

@@ -15,11 +15,22 @@ from .config import Config, is_system_namespace
 from .k8s import (
     apply_network_policy,
     delete_managed_policies,
+    list_namespaces_with_annotations,
     load_kube_config,
     prune_managed_policies,
     read_namespace_annotations,
 )
-from .parsing import ANNOTATION, WILDCARD, merge_sources, parse_sources, split_valid
+from .parsing import (
+    ANNOTATION,
+    WILDCARD,
+    expand_patterns,
+    is_valid_pattern,
+    merge_sources,
+    parse_sources,
+    partition_patterns,
+    pattern_matches,
+    split_valid,
+)
 from .policies import (
     MANAGED_BY,
     build_allow_all_egress,
@@ -50,19 +61,35 @@ def startup(settings: kopf.OperatorSettings, logger, **_):
     )
 
 
-def _desired_policies(namespace: str, annotations: dict, logger) -> list[dict]:
-    """Compute the ordered policy set [deny-ingress, egress, allow-ingress].
+def _expand_pattern_sources(namespace: str, patterns: list[str], logger) -> list[str]:
+    """Expand prefix patterns (e.g. "ihg-*") into the currently existing namespace
+    names that match them. Invalid patterns are skipped with a warning."""
+    valid_patterns: list[str] = []
+    invalid_patterns: list[str] = []
+    for p in patterns:
+        (valid_patterns if is_valid_pattern(p) else invalid_patterns).append(p)
+    if invalid_patterns:
+        logger.warning(
+            f"namespace {namespace}: skipping invalid namespace patterns {invalid_patterns}"
+        )
+    if not valid_patterns:
+        return []
+    all_namespaces = [name for name, _ in list_namespaces_with_annotations()]
+    return expand_patterns(valid_patterns, all_namespaces)
 
-    Deny-before-allow: the default-deny is applied first so ingress is closed
-    before the allow rules are added, minimizing any window in which unintended
-    ingress could be accepted during (re)application.
+
+def _desired_policies(namespace: str, annotations: dict, logger) -> list[dict]:
+    """Compute the ordered policy set [egress, allow-ingress, deny-ingress].
+
+    The allow rules are applied before the default-deny backstop so a namespace
+    is never left deny-only mid-reconcile; the backstop is gated on
+    cfg.default_deny_ingress.
     """
     raw = (annotations.get(ANNOTATION) or "").strip()
 
     if raw == WILDCARD:
         if cfg.allow_wildcard:
-            return [
-                build_default_deny_ingress(namespace),
+            policies = [
                 build_allow_all_egress(namespace),
                 build_allow_ingress(namespace, [], cfg.node_cidrs, allow_all_namespaces=True),
             ]
@@ -76,13 +103,17 @@ def _desired_policies(namespace: str, annotations: dict, logger) -> list[dict]:
         raw = ""
 
     user_sources = parse_sources(raw, self_name=namespace)
-    combined = merge_sources(user_sources, cfg.baseline_allowed_namespaces, self_name=namespace)
+    plain, patterns = partition_patterns(user_sources)
+    expanded = _expand_pattern_sources(namespace, patterns, logger) if patterns else []
+
+    combined = merge_sources(
+        plain + expanded, cfg.baseline_allowed_namespaces, self_name=namespace
+    )
     valid, invalid = split_valid(combined)
     if invalid:
         logger.warning(f"namespace {namespace}: skipping invalid namespace names {invalid}")
 
-    return [
-        build_default_deny_ingress(namespace),
+    policies = [
         build_allow_all_egress(namespace),
         build_allow_ingress(namespace, valid, cfg.node_cidrs),
     ]
@@ -111,9 +142,8 @@ def reconcile(name: str, meta: dict | None, logger, allow_cleanup: bool = True) 
             logger.info(f"[dry-run] would apply {pol['metadata']['name']} in {name}")
         return
 
-    # Deny-before-allow: apply the default-deny first so ingress is locked down
-    # before the allow rules are added. If a later apply fails, the namespace is
-    # left fail-closed (denying) rather than accidentally permitting ingress.
+    # Allow-before-deny: the allow rules land before the default-deny backstop
+    # so the namespace is never left deny-only mid-reconcile.
     for pol in policies:
         apply_network_policy(pol, logger)
 
@@ -131,6 +161,20 @@ def on_namespace_event(name, meta, logger, **_):
     reconcile(name, meta, logger, allow_cleanup=True)
 
 
+@kopf.on.create("", "v1", "namespaces")
+def on_namespace_created_refresh_patterns(name, logger, **_):
+    """A newly created namespace may match prefix patterns (e.g. "ihg-*") declared
+    on other namespaces; re-reconcile those immediately so the new namespace's
+    ingress allowance doesn't wait for the resync timer."""
+    for ns_name, annotations in list_namespaces_with_annotations():
+        if ns_name == name or ANNOTATION not in annotations:
+            continue
+        tokens = parse_sources(annotations.get(ANNOTATION), self_name=ns_name)
+        _, patterns = partition_patterns(tokens)
+        if any(is_valid_pattern(p) and pattern_matches(p, name) for p in patterns):
+            reconcile(ns_name, {"annotations": annotations}, logger, allow_cleanup=False)
+
+
 @kopf.timer("", "v1", "namespaces", interval=300.0)
 def resync(name, meta, logger, **_):
     # Periodic drift correction for enrolled namespaces; skip cleanup listing here.
@@ -139,7 +183,16 @@ def resync(name, meta, logger, **_):
 
 # --- Drift on managed policies ------------------------------------------------
 
-@kopf.on.delete("networking.k8s.io", "v1", "networkpolicies", labels=_MANAGED_LABEL_FILTER)
+# optional=True: without it, Kopf adds a KopfFinalizerMarker finalizer to every
+# managed policy so it can guarantee delivery of the deletion event. That
+# deadlocks external cleanup — with the operator stopped (scaled down or
+# uninstalled), deletions hang in Terminating forever because nothing removes
+# the finalizer. Best-effort delivery is fine here: the resync timer re-applies
+# any missed drift anyway.
+@kopf.on.delete(
+    "networking.k8s.io", "v1", "networkpolicies",
+    labels=_MANAGED_LABEL_FILTER, optional=True,
+)
 @kopf.on.update("networking.k8s.io", "v1", "networkpolicies", labels=_MANAGED_LABEL_FILTER)
 def on_managed_policy_changed(namespace, logger, **_):
     annotations = read_namespace_annotations(namespace)

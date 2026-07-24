@@ -10,10 +10,11 @@ For every namespace carrying the single annotation
 `truefoundry.com/allowed-ingress-namespaces`, the operator reconciles three standard
 `networking.k8s.io/v1` NetworkPolicies, applied in this order:
 
-1. `tfy-np-default-deny-ingress` — default-deny ingress (applied first).
-2. `tfy-np-allow-egress` — allow-all egress (egress stays open).
-3. `tfy-np-allow-ingress` — allow ingress from the same namespace, the configured
+1. `tfy-np-allow-egress` — allow-all egress (egress stays open).
+2. `tfy-np-allow-ingress` — allow ingress from the same namespace, the configured
    baseline namespaces, and the namespaces listed in the annotation.
+3. `tfy-np-default-deny-ingress` — default-deny ingress backstop (applied last,
+   after the allow rules are in place; can be disabled via `defaultDenyIngress`).
 
 Annotation semantics:
 
@@ -22,12 +23,12 @@ Annotation semantics:
 | Absent | Namespace not managed; any managed policies are removed. |
 | Present, empty (`""`) | Default-deny ingress + allow-all egress + allow `self` + baselines. |
 | Present, with list (`"argocd,prometheus"`) | The above **plus** allow ingress from each listed namespace. |
+| Present, with prefix wildcard (`"ihg-*"`) | The above **plus** allow ingress from every namespace whose name starts with `ihg-`. New matching namespaces are picked up immediately on creation; deletions are cleaned up on the next resync. Only a single trailing `*` is supported, and it can be mixed with plain names (`"argocd,ihg-*"`). |
 
-Key safety properties: **deny-before-allow** ordering (the default-deny is applied
-first so ingress is locked down before the allow rules are added; a failed
-mid-reconcile therefore fails closed), **baseline allows** so an empty annotation
-cannot black-hole a namespace, **system-namespace exclusion**, and **dry-run** mode
-for first rollout.
+Key safety properties: **allow-before-deny** ordering (the allow rules are applied
+before the default-deny backstop so a namespace is never left deny-only
+mid-reconcile), **baseline allows** so an empty annotation cannot black-hole a
+namespace, **system-namespace exclusion**, and **dry-run** mode for first rollout.
 
 ## Layout
 
@@ -77,19 +78,25 @@ docker push <registry>/tfy-netpol-operator:<image-version>
 ```
 
 ## Deploy
-TrueFoundry Provided Operator image: `tfy.jfrog.io/tfy-images/tfy-netpol-operator:0.5.0`
+TrueFoundry Provided Operator image: `tfy.jfrog.io/tfy-images/tfy-netpol-operator:0.6.0`
 
 ```bash
 helm upgrade --install tfy-netpol-operator deploy/helm/tfy-netpol-operator \
   -n tfy-system --create-namespace \
   --set image.repository=tfy.jfrog.io/tfy-images/tfy-netpol-operator \
-  --set image.tag=0.5.0 \
+  --set image.tag=0.6.0 \
   --set 'config.baselineAllowedNamespaces={istio-system,prometheus,tfy-agent}' \
   --set config.dryRun=true
 ```
 
 Roll out with `config.dryRun=true` first, review the logged intended policies, then set
 `config.dryRun=false` to enforce.
+
+> **Prerequisite:** the cluster's CNI must actually enforce NetworkPolicies, or the
+> operator's policies are accepted by the API server but ignored. On EKS with the AWS
+> VPC CNI, enable it on the addon (`enableNetworkPolicy: "true"`) and verify with
+> `kubectl get policyendpoints -A` — see the
+> [wildcard test report](docs/wildcard-annotation-test-report.md) for how this fails open.
 
 ## Enroll a namespace
 
@@ -101,6 +108,56 @@ metadata:
   annotations:
     truefoundry.com/allowed-ingress-namespaces: "argocd,prometheus"
 ```
+
+Prefix wildcards are supported, alone or mixed with plain names:
+
+```yaml
+    truefoundry.com/allowed-ingress-namespaces: "argocd,ihg-*"
+```
+
+## Verification
+
+The wildcard feature was verified end to end on a live EKS cluster (operator 0.6.0):
+policy-spec expansion, immediate pickup of newly created matching namespaces (< 10 s),
+pruning of deleted namespaces on resync, rejection/warning cases, and a real traffic
+matrix with CNI enforcement enabled — 15/15 cases passed. Full details, evidence, and
+observed latencies: [docs/wildcard-annotation-test-report.md](docs/wildcard-annotation-test-report.md).
+
+## Disable / uninstall
+
+Per namespace, remove the annotation and the operator deletes its policies there:
+
+```bash
+kubectl annotate ns <namespace> truefoundry.com/allowed-ingress-namespaces-
+```
+
+To remove everything, uninstall the release — a post-delete hook Job deletes every
+operator-managed NetworkPolicy across all namespaces (disable with
+`--set cleanupOnUninstall=false` to keep the policies):
+
+```bash
+helm uninstall tfy-netpol-operator -n tfy-system
+```
+
+For manual cleanup, scale the operator to zero **first** (it recreates its policies
+on drift while running), then delete by label:
+
+```bash
+kubectl -n tfy-system scale deploy tfy-netpol-operator --replicas=0
+kubectl delete netpol -A -l app.kubernetes.io/managed-by=tfy-netpol-operator
+```
+
+If policies created by an operator **older than 0.6.0** hang in `Terminating`
+here, they carry a Kopf finalizer only the (now stopped) operator could remove;
+strip it to let the deletion finish:
+
+```bash
+kubectl get netpol -A -o jsonpath='{range .items[*]}{.metadata.namespace} {.metadata.name}{"\n"}{end}' | \
+  while read ns name; do kubectl patch netpol "$name" -n "$ns" --type=merge -p '{"metadata":{"finalizers":null}}'; done
+```
+
+Note that `config.dryRun: true` only stops new writes — it does not remove policies
+that were already applied.
 
 ## Argo CD coexistence
 

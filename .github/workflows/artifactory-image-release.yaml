@@ -1,0 +1,84 @@
+# Builds and publishes the operator image to the public TrueFoundry Artifactory
+# Docker registry (tfy.jfrog.io/tfy-images) via the shared build workflow
+# (truefoundry/github-workflows-public), same as other TrueFoundry repos.
+# The image tag is Chart.yaml's appVersion; a tag that already exists in the
+# registry is skipped, so shipping a code change requires bumping appVersion
+# (and normally the chart version alongside it).
+name: Release operator image to public artifactory
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "src/**"
+      - "pyproject.toml"
+      - "Dockerfile"
+      - "deploy/helm/tfy-netpol-operator/Chart.yaml"
+      - ".github/workflows/artifactory-image-release.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: tfy-netpol-operator
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      exists: ${{ steps.check.outputs.exists }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Read image tag from Chart.yaml appVersion
+        id: version
+        run: |
+          TAG=$(awk '/^appVersion:/ {gsub(/"/, "", $2); print $2}' deploy/helm/tfy-netpol-operator/Chart.yaml)
+          if [ -z "$TAG" ]; then
+            echo "Could not read appVersion from Chart.yaml" >&2
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Image tag: $TAG"
+
+      - name: Log in to JFrog Artifactory
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ vars.TRUEFOUNDRY_ARTIFACTORY_REGISTRY_URL || 'tfy.jfrog.io' }}
+          username: ${{ secrets.TRUEFOUNDRY_ARTIFACTORY_PUBLIC_USERNAME }}
+          password: ${{ secrets.TRUEFOUNDRY_ARTIFACTORY_PUBLIC_PASSWORD }}
+
+      - name: Check whether the tag already exists
+        id: check
+        env:
+          IMAGE_URL: ${{ vars.TRUEFOUNDRY_ARTIFACTORY_PUBLIC_DOCKER_REGISTRY || 'tfy.jfrog.io/tfy-images' }}/${{ env.IMAGE_NAME }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          if docker manifest inspect "${IMAGE_URL}:${TAG}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "${IMAGE_URL}:${TAG} already exists; skipping build."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "${IMAGE_URL}:${TAG} not found; will build and push."
+          fi
+
+  build-and-push:
+    needs: prepare
+    if: needs.prepare.outputs.exists != 'true'
+    permissions:
+      id-token: write
+      contents: read
+    uses: truefoundry/github-workflows-public/.github/workflows/build.yml@main
+    with:
+      image_artifact_name: tfy-netpol-operator
+      image_tag: ${{ needs.prepare.outputs.tag }}
+      artifactory_registry_url: ${{ vars.TRUEFOUNDRY_ARTIFACTORY_REGISTRY_URL || 'tfy.jfrog.io' }}
+      artifactory_repository_url: ${{ vars.TRUEFOUNDRY_ARTIFACTORY_PUBLIC_DOCKER_REGISTRY || 'tfy.jfrog.io/tfy-images' }}
+      enable_jfrog: true
+    secrets:
+      artifactory_username: ${{ secrets.TRUEFOUNDRY_ARTIFACTORY_PUBLIC_USERNAME }}
+      artifactory_password: ${{ secrets.TRUEFOUNDRY_ARTIFACTORY_PUBLIC_PASSWORD }}

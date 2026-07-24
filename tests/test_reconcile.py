@@ -154,6 +154,92 @@ def test_desired_policies_omits_deny_when_disabled_wildcard(monkeypatch, logger)
     assert {"namespaceSelector": {}} in _froms(pols)
 
 
+# --- prefix patterns (e.g. "ihg-*") --------------------------------------------
+
+def set_cluster_namespaces(monkeypatch, namespaces: dict[str, dict]):
+    """Fake the cluster namespace listing: {name: annotations}."""
+    monkeypatch.setattr(
+        operator,
+        "list_namespaces_with_annotations",
+        lambda: list(namespaces.items()),
+    )
+
+
+def test_desired_policies_expands_prefix_pattern(monkeypatch, logger):
+    set_cfg(monkeypatch)
+    set_cluster_namespaces(
+        monkeypatch, {"ihg-a": {}, "ihg-b": {}, "other": {}, "app": {}}
+    )
+    pols = operator._desired_policies("app", {ANNOTATION: "ihg-*"}, logger)
+    selectors = [
+        f["namespaceSelector"]["matchLabels"][NS_NAME_LABEL] for f in _froms(pols)
+    ]
+    assert selectors == ["app", "ihg-a", "ihg-b"]  # self first, then matches
+    assert "other" not in selectors
+
+
+def test_desired_policies_pattern_combines_with_plain_names_and_baseline(monkeypatch, logger):
+    set_cfg(monkeypatch, baseline=["prometheus"])
+    set_cluster_namespaces(monkeypatch, {"ihg-a": {}, "app": {}})
+    pols = operator._desired_policies("app", {ANNOTATION: "argocd,ihg-*"}, logger)
+    selectors = [
+        f["namespaceSelector"]["matchLabels"][NS_NAME_LABEL] for f in _froms(pols)
+    ]
+    assert selectors == ["app", "argocd", "ihg-a", "prometheus"]
+
+
+def test_desired_policies_pattern_never_selects_self(monkeypatch, logger):
+    set_cfg(monkeypatch)
+    set_cluster_namespaces(monkeypatch, {"ihg-a": {}, "ihg-app": {}})
+    pols = operator._desired_policies("ihg-app", {ANNOTATION: "ihg-*"}, logger)
+    selectors = [
+        f["namespaceSelector"]["matchLabels"][NS_NAME_LABEL] for f in _froms(pols)
+    ]
+    # self appears once (as the leading self rule), not duplicated by the pattern
+    assert selectors == ["ihg-app", "ihg-a"]
+
+
+def test_desired_policies_invalid_pattern_is_skipped_and_warned(monkeypatch, logger):
+    set_cfg(monkeypatch)
+    set_cluster_namespaces(monkeypatch, {"ihg-a": {}})
+    pols = operator._desired_policies("app", {ANNOTATION: "*ihg,argocd"}, logger)
+    selectors = [
+        f["namespaceSelector"]["matchLabels"][NS_NAME_LABEL] for f in _froms(pols)
+    ]
+    assert selectors == ["app", "argocd"]
+    assert any("pattern" in w.lower() for w in logger.warnings)
+
+
+def test_new_namespace_triggers_reconcile_of_pattern_declarers(monkeypatch, applied, logger):
+    set_cfg(monkeypatch, dry_run=False)
+    set_cluster_namespaces(
+        monkeypatch,
+        {
+            "ihg-new": {},                     # the namespace that was just created
+            "app": {ANNOTATION: "ihg-*"},      # declares the pattern -> must refresh
+            "app2": {ANNOTATION: "argocd"},    # no pattern -> untouched
+            "plain": {},                       # unmanaged -> untouched
+        },
+    )
+    operator.on_namespace_created_refresh_patterns("ihg-new", logger)
+    applied_namespaces = {b["metadata"]["namespace"] for b in applied["applied"]}
+    assert applied_namespaces == {"app"}
+    # the refreshed policy now allows the new namespace
+    allow = next(
+        b for b in applied["applied"] if b["metadata"]["name"] == NAME_ALLOW_INGRESS
+    )
+    froms = allow["spec"]["ingress"][0]["from"]
+    selectors = [f["namespaceSelector"]["matchLabels"][NS_NAME_LABEL] for f in froms]
+    assert "ihg-new" in selectors
+
+
+def test_new_namespace_without_pattern_match_triggers_nothing(monkeypatch, applied, logger):
+    set_cfg(monkeypatch, dry_run=False)
+    set_cluster_namespaces(monkeypatch, {"app": {ANNOTATION: "ihg-*"}})
+    operator.on_namespace_created_refresh_patterns("unrelated", logger)
+    assert applied["applied"] == []
+
+
 # --- reconcile ----------------------------------------------------------------
 
 def test_reconcile_applies_three_policies_in_order(monkeypatch, applied, logger):

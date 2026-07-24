@@ -1,0 +1,5 @@
+dryRun: true
+allowWildcard: false
+baselineAllowedNamespaces: [istio-system, tfy-agent]
+denylist: []
+nodeCIDRs: []
