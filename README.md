@@ -78,13 +78,29 @@ docker push <registry>/tfy-netpol-operator:<image-version>
 ```
 
 ## Deploy
-TrueFoundry Provided Operator image: `tfy.jfrog.io/tfy-images/tfy-netpol-operator:0.6.0`
+
+TrueFoundry publishes the chart to `oci://tfy.jfrog.io/tfy-helm/tfy-netpol-operator`
+and the operator image to `tfy.jfrog.io/tfy-images/tfy-netpol-operator` (both via CI
+on merge to `main`; the chart's default image already points at the matching tag).
+The registry allows anonymous pulls — no `helm registry login` needed to install:
+
+```bash
+helm upgrade --install tfy-netpol-operator oci://tfy.jfrog.io/tfy-helm/tfy-netpol-operator \
+  --version 0.2.0 \
+  -n tfy-system --create-namespace \
+  --set 'config.baselineAllowedNamespaces={istio-system,prometheus,tfy-agent}' \
+  --set config.dryRun=true
+```
+
+To inspect the chart before installing: `helm pull oci://tfy.jfrog.io/tfy-helm/tfy-netpol-operator --version 0.2.0 --untar`.
+
+When developing, install from the local chart source instead:
 
 ```bash
 helm upgrade --install tfy-netpol-operator deploy/helm/tfy-netpol-operator \
   -n tfy-system --create-namespace \
-  --set image.repository=tfy.jfrog.io/tfy-images/tfy-netpol-operator \
-  --set image.tag=0.6.0 \
+  --set image.repository=<registry>/tfy-netpol-operator \
+  --set image.tag=<image-version> \
   --set 'config.baselineAllowedNamespaces={istio-system,prometheus,tfy-agent}' \
   --set config.dryRun=true
 ```
