@@ -6,6 +6,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Two versions are tracked per release: the **operator image** (`appVersion`,
 also the Python package version) and the **Helm chart** version.
 
+## Chart 0.2.1 - 2026-08-04
+
+### Fixed
+
+- Uninstall cleanup hook failed with a 403 on `patch networkpolicies`: its
+  ClusterRole granted only `list` and `delete`, but the hook patches away
+  leftover Kopf finalizers before deleting. Added the `patch` verb.
+
 ## Operator 0.6.0 / Chart 0.2.0 - 2026-07-23
 
 ### Verified
