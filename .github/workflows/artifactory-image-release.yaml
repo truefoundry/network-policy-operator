@@ -74,6 +74,7 @@ jobs:
       contents: read
     uses: truefoundry/github-workflows-public/.github/workflows/build.yml@main
     with:
+      artifactory_oidc_provider_name: github-jfrog-public
       image_artifact_name: tfy-netpol-operator
       image_tag: ${{ needs.prepare.outputs.tag }}
       artifactory_registry_url: ${{ vars.TRUEFOUNDRY_ARTIFACTORY_REGISTRY_URL || 'tfy.jfrog.io' }}
