@@ -74,11 +74,9 @@ jobs:
       contents: read
     uses: truefoundry/github-workflows-public/.github/workflows/build.yml@main
     with:
+      artifactory_oidc_provider_name: github-jfrog-public
       image_artifact_name: tfy-netpol-operator
       image_tag: ${{ needs.prepare.outputs.tag }}
       artifactory_registry_url: ${{ vars.TRUEFOUNDRY_ARTIFACTORY_REGISTRY_URL || 'tfy.jfrog.io' }}
       artifactory_repository_url: ${{ vars.TRUEFOUNDRY_ARTIFACTORY_PUBLIC_DOCKER_REGISTRY || 'tfy.jfrog.io/tfy-images' }}
       enable_jfrog: true
-    secrets:
-      artifactory_username: ${{ secrets.TRUEFOUNDRY_ARTIFACTORY_PUBLIC_USERNAME }}
-      artifactory_password: ${{ secrets.TRUEFOUNDRY_ARTIFACTORY_PUBLIC_PASSWORD }}
